@@ -1,0 +1,195 @@
+# Windows Forms aanhalen voor de InputBox
+Add-Type -AssemblyName Microsoft.VisualBasic
+
+# --- Configuratie ---
+
+# Doelpad (waar het nieuwe bestand wordt geplaatst)
+$destinationPath = "\\som.org.om.local@SSL\DavWWWRoot\sites\MulderT\Onderdelen\Beoordelen\SitePages\"
+
+# Bronpad (waar het sjabloonbestand zich bevindt)
+$sourcePath = "\\som.org.om.local@SSL\DavWWWRoot\sites\MulderT\Onderdelen\Beoordelen\SitePages\Sjabloon\"
+
+# Naam van het sjabloonbestand
+$templateFile = "SjabloonWM-Beoordelen.aspx"
+
+# --- SharePoint REST API Configuratie ---
+
+# De $siteUrl moet verwijzen naar de subsite die de 'SitePages' bibliotheek bevat.
+$siteUrl = "https://som.org.om.local/sites/MulderT/Onderdelen/Beoordelen"
+
+# UNC-pad wat we moeten 'wegknippen' om de server-relatieve URL te krijgen
+$uncPrefix = '\\som.org.om.local@SSL\DavWWWRoot'
+# Het HTTP-equivalent van het UNC-pad
+$httpPrefix = 'https://som.org.om.local'
+
+
+# --- Functie om Titel bij te werken (REST API) ---
+function Update-SharePointTitleREST (
+    [string]$ApiSiteUrl,
+    [string]$ServerRelativeFileUrl,
+    [string]$NewTitle
+) {
+    Write-Host "Titel bijwerken via REST API op site: $ApiSiteUrl"
+    
+    try {
+        # STAP 1: Haal de Form Digest Value op (nodig voor schrijfacties)
+        $digestUrl = "$ApiSiteUrl/_api/contextinfo"
+        
+        Write-Host "Context ophalen van: $digestUrl"
+        $digestResponse = Invoke-RestMethod -Uri $digestUrl -Method Post -UseDefaultCredentials -Headers @{ 
+            "Accept" = "application/json;odata=verbose" 
+        }
+        
+        $formDigestValue = $digestResponse.d.GetContextWebInformation.FormDigestValue
+        Write-Host "Form Digest verkregen."
+
+        # STAP 2: Haal de metadata van het zojuist gemaakte bestand op
+        $fileApiUrl = "$ApiSiteUrl/_api/web/GetFileByServerRelativeUrl('$ServerRelativeFileUrl')/ListItemAllFields"
+        
+        Write-Host "Bestandsitem ophalen van: $fileApiUrl"
+        $itemResponse = Invoke-RestMethod -Uri $fileApiUrl -Method Get -UseDefaultCredentials -Headers @{ 
+            "Accept" = "application/json;odata=verbose" 
+        }
+        
+        $itemMetadata = $itemResponse.d.__metadata
+        Write-Host "Metadata van bestand opgehaald (Type: $($itemMetadata.type))"
+
+        # STAP 3: Bereid de update-payload (JSON) voor
+        $payload = @{
+            "__metadata" = @{ "type" = $itemMetadata.type }
+            "Title"      = $NewTitle
+        }
+        $jsonPayload = $payload | ConvertTo-Json -Depth 3
+
+        # STAP 4: Voer de update (MERGE) uit
+        $updateUrl = $itemMetadata.uri
+        
+        Write-Host "Update uitvoeren naar: $updateUrl"
+        Invoke-RestMethod -Uri $updateUrl -Method Post -UseDefaultCredentials -Headers @{
+            "Accept"             = "application/json;odata=verbose"
+            "X-RequestDigest"    = $formDigestValue
+            "X-HTTP-Method"      = "MERGE"
+            "If-Match"           = $itemMetadata.etag
+            "Content-Type"       = "application/json;odata=verbose"
+            "Content-Length"     = $jsonPayload.Length
+        } -Body $jsonPayload
+
+        Write-Host "SharePoint Titel succesvol bijgewerkt naar: $NewTitle"
+
+    } catch {
+        Write-Host "FOUT bij het bijwerken van de SharePoint Titel via REST API:"
+        Write-Host $_.Exception.Message
+        if ($_.Exception.Response) {
+            $_.Exception.Response.GetResponseStream() | ForEach-Object { 
+                $reader = New-Object System.IO.StreamReader($_)
+                $reader.ReadToEnd() 
+            } | Write-Host
+        }
+    }
+}
+
+
+# --- Functie om het bestand te maken ---
+function Create-WeekmailFile($jaar, $weekNumber) {
+    
+    # Definieer een ID voor de progressiebalk, zodat we hem kunnen bijwerken
+    $progressId = 1
+    $activity = "Weekmail aanmaken (Jaar: $jaar, Week: $weekNumber)"
+
+    # Bestandsnaam voor het nieuwe bestand
+    $newFileName = "Weekmail---Jaar-$jaar---Week-$weekNumber---Verkeersborden.aspx"
+
+    # Volledige paden naar het sjabloonbestand en het nieuwe bestand
+    $templateFilePath = Join-Path -Path $sourcePath -ChildPath $templateFile
+    $newFilePath = Join-Path -Path $destinationPath -ChildPath $newFileName
+
+    if (Test-Path -Path $templateFilePath) {
+        
+        # --- STAP 1: BESTAND KOPIËREN ---
+        # *** AANGEPAST: Progressiebalk tonen ***
+        Write-Progress -Id $progressId -Activity $activity -Status "Stap 1/5: Sjabloon kopiëren..." -PercentComplete 0
+        Write-Host "Bestand kopiëren..."
+        Copy-Item -Path $templateFilePath -Destination $newFilePath
+        Write-Host "Bestand gekopieerd naar: $newFilePath"
+
+        # --- STAP 2: INHOUD VAN BESTAND AANPASSEN (PLACEHOLDERS VERVANGEN) ---
+        try {
+            # *** AANGEPAST: Progressiebalk bijwerken ***
+            Write-Progress -Id $progressId -Activity $activity -Status "Stap 2/5: Placeholders in bestand vervangen..." -PercentComplete 20
+            
+            Write-Host "Placeholders in het nieuwe bestand vervangen..."
+            (Get-Content -Path $newFilePath -Raw -Encoding Default) -replace '{{jaartal}}', $jaar -replace '{{weeknummer}}', $weekNumber | Set-Content -Path $newFilePath -Encoding UTF8
+            Write-Host "Placeholders succesvol vervangen."
+        } catch {
+            Write-Host "FOUT bij het vervangen van placeholders in het bestand:"
+            Write-Host $_.Exception.Message
+        }
+
+        # --- STAP 3: WACHTEN OP SHAREPOINT (MET PROGRESSIEBALK) ---
+        # *** AANGEPAST: Start-Sleep vervangen door een lus met Write-Progress ***
+        Write-Host "Wachten op SharePoint-verwerking..."
+        $wachtTijd = 10 # Totaal 10 seconden wachten
+        for ($i = 1; $i -le $wachtTijd; $i++) {
+            $percent = 40 + ($i * 2) # Telt op van 40% naar 60%
+            Write-Progress -Id $progressId -Activity $activity -Status "Stap 3/5: Wachten op SharePoint ($i/$wachtTijd sec)..." -PercentComplete $percent
+            Start-Sleep -Seconds 1
+        }
+        # --- EINDE AANGEPAST GEDEELTE ---
+
+
+        # --- STAP 4: TITEL-KOLOM BIJWERKEN (MET DE JUISTE SUBSITE-CONTEXT) ---
+        
+        # *** AANGEPAST: Progressiebalk bijwerken ***
+        Write-Progress -Id $progressId -Activity $activity -Status "Stap 4/5: SharePoint Titel-kolom bijwerken (API)..." -PercentComplete 60
+        
+        $newSharePointTitle = "Weekmail $weekNumber ($jaar) - Verkeersborden"
+        $serverRelativeUrl = $newFilePath -replace [regex]::Escape($uncPrefix), ""
+        $serverRelativeUrl = $serverRelativeUrl -replace '\\', '/'
+
+        Update-SharePointTitleREST -ApiSiteUrl $siteUrl -ServerRelativeFileUrl $serverRelativeUrl -NewTitle $newSharePointTitle
+        
+        # --- EINDE TITEL BIJWERKEN ---
+
+
+        # --- STAP 5: BROWSER OPENEN (zoals voorheen) ---
+        
+        # *** AANGEPAST: Progressiebalk bijwerken ***
+        Write-Progress -Id $progressId -Activity $activity -Status "Stap 5/5: Pagina openen in browser..." -PercentComplete 80
+        
+        $httpPath = $newFilePath -replace [regex]::Escape($uncPrefix), $httpPrefix
+        $httpPath = $httpPath -replace '\\', '/'
+
+        Write-Host "Nieuwe pagina openen in browser: $httpPath"
+        Start-Process $httpPath
+        
+        # *** AANGEPAST: Progressiebalk voltooien en sluiten ***
+        Write-Progress -Id $progressId -Activity $activity -Status "Klaar!" -Completed
+
+    } else {
+        Write-Host "Sjabloonbestand niet gevonden: $templateFilePath"
+    }
+}
+
+# --- Gebruikersinvoer ---
+# Vraag het jaartal op
+$jaarInput = [Microsoft.VisualBasic.Interaction]::InputBox("Voor welk jaar wil je de weekmail aanmaken?", "Jaartal Invoer", (Get-Date).Year)
+
+if ($jaarInput -eq "" -or -not ($jaarInput -match '^\d{4}$')) {
+    Write-Host "Geen geldig jaartal ingevoerd. Script wordt afgesloten."
+    exit
+}
+
+# Vraag het weeknummer op
+$weekInput = [Microsoft.VisualBasic.Interaction]::InputBox("In welke week ga je deze weekmail publiceren? Schrijf het weeknummer op:", "Weeknummer Invoer", "")
+
+if ($weekInput -eq "" -or -not ($weekInput -match '^\d+$')) {
+    Write-Host "Geen geldig weeknummer ingevoerd. Script wordt afgesloten."
+    exit
+}
+
+# Zet de invoer om naar correcte types
+$jaar = [int]$jaarInput
+$weekNumber = [int]$weekInput
+
+# Maak het bestand aan
+Create-WeekmailFile -jaar $jaar -weekNumber $weekNumber
