@@ -97,7 +97,7 @@ function Create-WeekmailFile($jaar, $weekNumber) {
     $activity = "Weekmail aanmaken (Jaar: $jaar, Week: $weekNumber)"
 
     # Bestandsnaam voor het nieuwe bestand
-    $newFileName = "Weekmail---Jaar-$jaar---Week-$weekNumber---Verkeersborden.aspx"
+    $newFileName = "Weekmail $weekNumber ($jaar) - Verkeersborden.aspx"
 
     # Volledige paden naar het sjabloonbestand en het nieuwe bestand
     $templateFilePath = Join-Path -Path $sourcePath -ChildPath $templateFile
