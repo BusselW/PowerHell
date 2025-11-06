@@ -1,3 +1,6 @@
+# Script parameter voor dry-run modus
+param([switch]$DryRun)
+
 # Windows Forms aanhalen voor de InputBox
 Add-Type -AssemblyName Microsoft.VisualBasic
 
@@ -30,6 +33,14 @@ function Update-SharePointTitleREST (
     [string]$NewTitle
 ) {
     Write-Host "Titel bijwerken via REST API op site: $ApiSiteUrl"
+    
+    if ($DryRun) {
+        Write-Host "[DRY-RUN] Zou SharePoint REST API aanroepen:"
+        Write-Host "[DRY-RUN] - Site: $ApiSiteUrl"
+        Write-Host "[DRY-RUN] - Bestand: $ServerRelativeFileUrl"
+        Write-Host "[DRY-RUN] - Nieuwe titel: $NewTitle"
+        return
+    }
     
     try {
         # STAP 1: Haal de Form Digest Value op (nodig voor schrijfacties)
@@ -71,7 +82,6 @@ function Update-SharePointTitleREST (
             "X-HTTP-Method"      = "MERGE"
             "If-Match"           = $itemMetadata.etag
             "Content-Type"       = "application/json;odata=verbose"
-            "Content-Length"     = $jsonPayload.Length
         } -Body $jsonPayload
 
         Write-Host "SharePoint Titel succesvol bijgewerkt naar: $NewTitle"
@@ -80,21 +90,32 @@ function Update-SharePointTitleREST (
         Write-Host "FOUT bij het bijwerken van de SharePoint Titel via REST API:"
         Write-Host $_.Exception.Message
         if ($_.Exception.Response) {
-            $_.Exception.Response.GetResponseStream() | ForEach-Object { 
-                $reader = New-Object System.IO.StreamReader($_)
-                $reader.ReadToEnd() 
-            } | Write-Host
+            try {
+                $stream = $_.Exception.Response.GetResponseStream()
+                $reader = [System.IO.StreamReader]::new($stream)
+                $errorBody = $reader.ReadToEnd()
+                Write-Host "Response Body: $errorBody"
+                $reader.Dispose()
+                $stream.Dispose()
+            } catch {
+                Write-Host "Kon response body niet lezen: $($_.Exception.Message)"
+            }
         }
     }
 }
 
 
 # --- Functie om het bestand te maken ---
-function Create-WeekmailFile($jaar, $weekNumber) {
+function New-WeekmailFile($jaar, $weekNumber) {
     
     # Definieer een ID voor de progressiebalk, zodat we hem kunnen bijwerken
     $progressId = 1
     $activity = "Weekmail aanmaken (Jaar: $jaar, Week: $weekNumber)"
+    
+    if ($DryRun) {
+        Write-Host "=== DRY-RUN MODUS - Geen bestanden worden gewijzigd ==="
+        $activity += " [DRY-RUN]"
+    }
 
     # Bestandsnaam voor het nieuwe bestand
     $newFileName = "Weekmail---Jaar-$jaar---Week-$weekNumber---Verkeersborden.aspx"
@@ -109,8 +130,13 @@ function Create-WeekmailFile($jaar, $weekNumber) {
         # *** AANGEPAST: Progressiebalk tonen ***
         Write-Progress -Id $progressId -Activity $activity -Status "Stap 1/5: Sjabloon kopiëren..." -PercentComplete 0
         Write-Host "Bestand kopiëren..."
-        Copy-Item -Path $templateFilePath -Destination $newFilePath
-        Write-Host "Bestand gekopieerd naar: $newFilePath"
+        
+        if ($DryRun) {
+            Write-Host "[DRY-RUN] Zou kopiëren: $templateFilePath -> $newFilePath"
+        } else {
+            Copy-Item -Path $templateFilePath -Destination $newFilePath
+            Write-Host "Bestand gekopieerd naar: $newFilePath"
+        }
 
         # --- STAP 2: INHOUD VAN BESTAND AANPASSEN (PLACEHOLDERS VERVANGEN) ---
         try {
@@ -118,8 +144,13 @@ function Create-WeekmailFile($jaar, $weekNumber) {
             Write-Progress -Id $progressId -Activity $activity -Status "Stap 2/5: Placeholders in bestand vervangen..." -PercentComplete 20
             
             Write-Host "Placeholders in het nieuwe bestand vervangen..."
-            (Get-Content -Path $newFilePath -Raw -Encoding Default) -replace '{{jaartal}}', $jaar -replace '{{weeknummer}}', $weekNumber | Set-Content -Path $newFilePath -Encoding UTF8
-            Write-Host "Placeholders succesvol vervangen."
+            
+            if ($DryRun) {
+                Write-Host "[DRY-RUN] Zou vervangen: {{jaartal}} -> $jaar, {{weeknummer}} -> $weekNumber"
+            } else {
+                (Get-Content -Path $newFilePath -Raw -Encoding UTF8) -replace '{{jaartal}}', $jaar -replace '{{weeknummer}}', $weekNumber | Set-Content -Path $newFilePath -Encoding UTF8
+                Write-Host "Placeholders succesvol vervangen."
+            }
         } catch {
             Write-Host "FOUT bij het vervangen van placeholders in het bestand:"
             Write-Host $_.Exception.Message
@@ -145,8 +176,18 @@ function Create-WeekmailFile($jaar, $weekNumber) {
         $newSharePointTitle = "Weekmail $weekNumber ($jaar) - Verkeersborden"
         $serverRelativeUrl = $newFilePath -replace [regex]::Escape($uncPrefix), ""
         $serverRelativeUrl = $serverRelativeUrl -replace '\\', '/'
+        
+        # Validatie van pad conversie
+        if (-not $serverRelativeUrl.StartsWith('/')) {
+            Write-Host "WAARSCHUWING: Server-relative URL begint niet met '/': $serverRelativeUrl"
+        }
 
-        Update-SharePointTitleREST -ApiSiteUrl $siteUrl -ServerRelativeFileUrl $serverRelativeUrl -NewTitle $newSharePointTitle
+        if ($DryRun) {
+            Write-Host "[DRY-RUN] Zou SharePoint titel bijwerken naar: $newSharePointTitle"
+            Write-Host "[DRY-RUN] Server-relative URL: $serverRelativeUrl"
+        } else {
+            Update-SharePointTitleREST -ApiSiteUrl $siteUrl -ServerRelativeFileUrl $serverRelativeUrl -NewTitle $newSharePointTitle
+        }
         
         # --- EINDE TITEL BIJWERKEN ---
 
@@ -159,8 +200,12 @@ function Create-WeekmailFile($jaar, $weekNumber) {
         $httpPath = $newFilePath -replace [regex]::Escape($uncPrefix), $httpPrefix
         $httpPath = $httpPath -replace '\\', '/'
 
-        Write-Host "Nieuwe pagina openen in browser: $httpPath"
-        Start-Process $httpPath
+        if ($DryRun) {
+            Write-Host "[DRY-RUN] Zou browser openen naar: $httpPath"
+        } else {
+            Write-Host "Nieuwe pagina openen in browser: $httpPath"
+            Start-Process $httpPath
+        }
         
         # *** AANGEPAST: Progressiebalk voltooien en sluiten ***
         Write-Progress -Id $progressId -Activity $activity -Status "Klaar!" -Completed
@@ -191,5 +236,13 @@ if ($weekInput -eq "" -or -not ($weekInput -match '^\d+$')) {
 $jaar = [int]$jaarInput
 $weekNumber = [int]$weekInput
 
+# Validatie van invoerwaarden
+if ($jaar -lt 2020 -or $jaar -gt 2030) {
+    Write-Host "WAARSCHUWING: Jaar buiten verwacht bereik (2020-2030): $jaar"
+}
+if ($weekNumber -lt 1 -or $weekNumber -gt 53) {
+    Write-Host "WAARSCHUWING: Weeknummer buiten bereik (1-53): $weekNumber"
+}
+
 # Maak het bestand aan
-Create-WeekmailFile -jaar $jaar -weekNumber $weekNumber
+New-WeekmailFile -jaar $jaar -weekNumber $weekNumber
