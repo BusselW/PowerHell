@@ -25,6 +25,29 @@ $uncPrefix = '\\som.org.om.local@SSL\DavWWWRoot'
 # Het HTTP-equivalent van het UNC-pad
 $httpPrefix = 'https://som.org.om.local'
 
+# --- Hulpfunctie voor robuuste pad-conversie ---
+function Convert-ToServerRelativeUrl {
+    param([string]$UncPath, [string]$UncPrefix)
+    
+    # Normaliseer beide paden (verwijder trailing slashes)
+    $normalizedPath = $UncPath.TrimEnd('\')
+    $normalizedPrefix = $UncPrefix.TrimEnd('\')
+    
+    if ($normalizedPath.StartsWith($normalizedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $relativePath = $normalizedPath.Substring($normalizedPrefix.Length)
+        $serverRelativeUrl = $relativePath -replace '\\', '/'
+        
+        # Zorg dat het begint met '/'
+        if (-not $serverRelativeUrl.StartsWith('/')) {
+            $serverRelativeUrl = '/' + $serverRelativeUrl
+        }
+        
+        return $serverRelativeUrl
+    } else {
+        throw "Kan UNC-pad niet converteren: '$UncPath' begint niet met '$UncPrefix'"
+    }
+}
+
 
 # --- Functie om Titel bij te werken (REST API) ---
 function Update-SharePointTitleREST (
@@ -49,9 +72,17 @@ function Update-SharePointTitleREST (
         Write-Host "Context ophalen van: $digestUrl"
         $digestResponse = Invoke-RestMethod -Uri $digestUrl -Method Post -UseDefaultCredentials -Headers @{ 
             "Accept" = "application/json;odata=verbose" 
+        } -ErrorAction Stop
+        
+        # Defensieve check van response structuur
+        if (-not $digestResponse -or -not $digestResponse.d -or -not $digestResponse.d.GetContextWebInformation) {
+            throw "Onverwachte response structuur van contextinfo endpoint"
         }
         
         $formDigestValue = $digestResponse.d.GetContextWebInformation.FormDigestValue
+        if (-not $formDigestValue) {
+            throw "FormDigestValue niet gevonden in response"
+        }
         Write-Host "Form Digest verkregen."
 
         # STAP 2: Haal de metadata van het zojuist gemaakte bestand op
@@ -60,9 +91,17 @@ function Update-SharePointTitleREST (
         Write-Host "Bestandsitem ophalen van: $fileApiUrl"
         $itemResponse = Invoke-RestMethod -Uri $fileApiUrl -Method Get -UseDefaultCredentials -Headers @{ 
             "Accept" = "application/json;odata=verbose" 
+        } -ErrorAction Stop
+        
+        # Defensieve check van response structuur
+        if (-not $itemResponse -or -not $itemResponse.d -or -not $itemResponse.d.__metadata) {
+            throw "Onverwachte response structuur van file metadata endpoint"
         }
         
         $itemMetadata = $itemResponse.d.__metadata
+        if (-not $itemMetadata.type -or -not $itemMetadata.uri) {
+            throw "Vereiste metadata (type/uri) niet gevonden in response"
+        }
         Write-Host "Metadata van bestand opgehaald (Type: $($itemMetadata.type))"
 
         # STAP 3: Bereid de update-payload (JSON) voor
@@ -87,11 +126,12 @@ function Update-SharePointTitleREST (
         Write-Host "SharePoint Titel succesvol bijgewerkt naar: $NewTitle"
 
     } catch {
+        $outerException = $_
         Write-Host "FOUT bij het bijwerken van de SharePoint Titel via REST API:"
-        Write-Host $_.Exception.Message
-        if ($_.Exception.Response) {
+        Write-Host $outerException.Exception.Message
+        if ($outerException.Exception.Response) {
             try {
-                $stream = $_.Exception.Response.GetResponseStream()
+                $stream = $outerException.Exception.Response.GetResponseStream()
                 $reader = [System.IO.StreamReader]::new($stream)
                 $errorBody = $reader.ReadToEnd()
                 Write-Host "Response Body: $errorBody"
@@ -106,7 +146,14 @@ function Update-SharePointTitleREST (
 
 
 # --- Functie om het bestand te maken ---
-function New-WeekmailFile($jaar, $weekNumber) {
+function New-WeekmailFile {
+    param(
+        [Parameter(Mandatory=$true)]
+        [int]$jaar,
+        
+        [Parameter(Mandatory=$true)]
+        [int]$weekNumber
+    )
     
     # Definieer een ID voor de progressiebalk, zodat we hem kunnen bijwerken
     $progressId = 1
@@ -126,6 +173,16 @@ function New-WeekmailFile($jaar, $weekNumber) {
 
     if (Test-Path -Path $templateFilePath) {
         
+        # --- CONTROLE OP BESTAAND BESTAND ---
+        if ((Test-Path -Path $newFilePath) -and -not $DryRun) {
+            Write-Host "WAARSCHUWING: Bestand bestaat al: $newFilePath"
+            $overwriteChoice = [Microsoft.VisualBasic.Interaction]::InputBox("Bestand bestaat al. Overschrijven? (ja/nee)", "Bestand overschrijven", "nee")
+            if ($overwriteChoice.ToLower() -ne "ja") {
+                Write-Host "Bewerking geannuleerd door gebruiker."
+                return
+            }
+        }
+        
         # --- STAP 1: BESTAND KOPIËREN ---
         # *** AANGEPAST: Progressiebalk tonen ***
         Write-Progress -Id $progressId -Activity $activity -Status "Stap 1/5: Sjabloon kopiëren..." -PercentComplete 0
@@ -133,8 +190,11 @@ function New-WeekmailFile($jaar, $weekNumber) {
         
         if ($DryRun) {
             Write-Host "[DRY-RUN] Zou kopiëren: $templateFilePath -> $newFilePath"
+            if (Test-Path -Path $newFilePath) {
+                Write-Host "[DRY-RUN] (Bestand bestaat al en zou worden overschreven)"
+            }
         } else {
-            Copy-Item -Path $templateFilePath -Destination $newFilePath
+            Copy-Item -Path $templateFilePath -Destination $newFilePath -Force
             Write-Host "Bestand gekopieerd naar: $newFilePath"
         }
 
@@ -174,12 +234,15 @@ function New-WeekmailFile($jaar, $weekNumber) {
         Write-Progress -Id $progressId -Activity $activity -Status "Stap 4/5: SharePoint Titel-kolom bijwerken (API)..." -PercentComplete 60
         
         $newSharePointTitle = "Weekmail $weekNumber ($jaar) - Verkeersborden"
-        $serverRelativeUrl = $newFilePath -replace [regex]::Escape($uncPrefix), ""
-        $serverRelativeUrl = $serverRelativeUrl -replace '\\', '/'
         
-        # Validatie van pad conversie
-        if (-not $serverRelativeUrl.StartsWith('/')) {
-            Write-Host "WAARSCHUWING: Server-relative URL begint niet met '/': $serverRelativeUrl"
+        try {
+            $serverRelativeUrl = Convert-ToServerRelativeUrl -UncPath $newFilePath -UncPrefix $uncPrefix
+            Write-Host "Server-relative URL: $serverRelativeUrl"
+        } catch {
+            Write-Host "FOUT bij pad-conversie: $($_.Exception.Message)"
+            Write-Host "UNC-pad: $newFilePath"
+            Write-Host "UNC-prefix: $uncPrefix"
+            return
         }
 
         if ($DryRun) {
@@ -197,14 +260,24 @@ function New-WeekmailFile($jaar, $weekNumber) {
         # *** AANGEPAST: Progressiebalk bijwerken ***
         Write-Progress -Id $progressId -Activity $activity -Status "Stap 5/5: Pagina openen in browser..." -PercentComplete 80
         
-        $httpPath = $newFilePath -replace [regex]::Escape($uncPrefix), $httpPrefix
-        $httpPath = $httpPath -replace '\\', '/'
-
-        if ($DryRun) {
-            Write-Host "[DRY-RUN] Zou browser openen naar: $httpPath"
-        } else {
-            Write-Host "Nieuwe pagina openen in browser: $httpPath"
-            Start-Process $httpPath
+        try {
+            $httpPath = $newFilePath -replace [regex]::Escape($uncPrefix), $httpPrefix
+            $httpPath = $httpPath -replace '\\', '/'
+            
+            # Valideer dat het een geldige URL is
+            if (-not [Uri]::IsWellFormedUriString($httpPath, [UriKind]::Absolute)) {
+                throw "Gegenereerde URL is niet geldig: $httpPath"
+            }
+            
+            if ($DryRun) {
+                Write-Host "[DRY-RUN] Zou browser openen naar: $httpPath"
+            } else {
+                Write-Host "Nieuwe pagina openen in browser: $httpPath"
+                Start-Process $httpPath
+            }
+        } catch {
+            Write-Host "FOUT bij HTTP-pad conversie: $($_.Exception.Message)"
+            Write-Host "Kan browser niet openen voor: $newFilePath"
         }
         
         # *** AANGEPAST: Progressiebalk voltooien en sluiten ***
