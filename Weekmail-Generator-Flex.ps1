@@ -21,7 +21,7 @@ $teamName = "Flex"
 # --- SharePoint REST API Configuratie ---
 
 # De $siteUrl moet verwijzen naar de subsite die de 'SitePages' bibliotheek bevat.
-$siteUrl = "https://som.org.om.local/sites/MulderT/Onderdelen/Beoordelen"
+$siteUrl = "https://som.org.om.local/sites/MulderT/Onderdelen/Beoordelen/Flex"
 
 # UNC-pad wat we moeten 'wegknippen' om de server-relatieve URL te krijgen
 $uncPrefix = '\\som.org.om.local@SSL\DavWWWRoot'
