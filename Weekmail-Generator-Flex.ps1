@@ -7,7 +7,7 @@ Add-Type -AssemblyName Microsoft.VisualBasic
 # --- Configuratie voor Team: Flex ---
 
 # Doelpad (waar het nieuwe bestand wordt geplaatst)
-$destinationPath = "\\som.org.om.local@SSL\DavWWWRoot\sites\MulderT\Onderdelen\Beoordelen\Flex\SitePages\"
+$destinationPath = "\\som.org.om.local@SSL\DavWWWRoot\sites\MulderT\Onderdelen\Beoordelen\Flex\SitePages\Sjabloon\"
 
 # Bronpad (waar het sjabloonbestand zich bevindt)
 $sourcePath = "\\som.org.om.local@SSL\DavWWWRoot\sites\MulderT\Onderdelen\Beoordelen\Flex\SitePages\Sjabloon\"
