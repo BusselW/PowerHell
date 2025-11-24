@@ -67,6 +67,9 @@ function Update-SharePointTitleREST (
         return
     }
     
+    # Stel TLS 1.2 of hoger in voor SharePoint API-verbindingen
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+    
     try {
         # STAP 1: Haal de Form Digest Value op (nodig voor schrijfacties)
         $digestUrl = "$ApiSiteUrl/_api/contextinfo"
