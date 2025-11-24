@@ -288,13 +288,9 @@ if ($jaarInput -eq "" -or -not ($jaarInput -match '^\d{4}$')) {
 }
 
 # Vraag het weeknummer op
-# Bereken de standaard weeknummer: huidige week + 1
-$currentWeek = (Get-Culture).Calendar.GetWeekOfYear((Get-Date), [System.Globalization.CalendarWeekRule]::FirstFourDayWeek, [DayOfWeek]::Monday)
-$defaultWeek = $currentWeek + 1
-# Controleer voor jaar-overgang (week 53/54 -> week 1)
-if ($defaultWeek -gt 53) {
-    $defaultWeek = 1
-}
+# Bereken de standaard weeknummer: huidige week + 1 (via datum berekening voor juiste jaar-overgang)
+$nextWeekDate = (Get-Date).AddDays(7)
+$defaultWeek = (Get-Culture).Calendar.GetWeekOfYear($nextWeekDate, [System.Globalization.CalendarWeekRule]::FirstFourDayWeek, [DayOfWeek]::Monday)
 $weekInput = [Microsoft.VisualBasic.Interaction]::InputBox("In welke week ga je deze weekmail voor $teamName publiceren? Schrijf het weeknummer op:", "Weeknummer Invoer", $defaultWeek)
 
 if ($weekInput -eq "" -or -not ($weekInput -match '^\d+$')) {
