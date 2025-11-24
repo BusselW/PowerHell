@@ -227,7 +227,7 @@ function New-WeekmailFile {
         # --- STAP 4: TITEL-KOLOM BIJWERKEN (MET DE JUISTE SUBSITE-CONTEXT) ---
         Write-Progress -Id $progressId -Activity $activity -Status "Stap 4/5: SharePoint Titel-kolom bijwerken (API)..." -PercentComplete 60
         
-        $newSharePointTitle = "Weekmail $weekNumber ($jaar) - $teamName"
+        $newSharePointTitle = "Weekmail $teamName - Jaar $jaar - Week $weekNumber"
         
         try {
             $serverRelativeUrl = Convert-ToServerRelativeUrl -UncPath $newFilePath -UncPrefix $uncPrefix
@@ -288,7 +288,10 @@ if ($jaarInput -eq "" -or -not ($jaarInput -match '^\d{4}$')) {
 }
 
 # Vraag het weeknummer op
-$weekInput = [Microsoft.VisualBasic.Interaction]::InputBox("In welke week ga je deze weekmail voor $teamName publiceren? Schrijf het weeknummer op:", "Weeknummer Invoer", "")
+# Bereken de standaard weeknummer: huidige week + 1 (via datum berekening voor juiste jaar-overgang)
+$nextWeekDate = (Get-Date).AddDays(7)
+$defaultWeek = (Get-Culture).Calendar.GetWeekOfYear($nextWeekDate, [System.Globalization.CalendarWeekRule]::FirstFourDayWeek, [DayOfWeek]::Monday)
+$weekInput = [Microsoft.VisualBasic.Interaction]::InputBox("In welke week ga je deze weekmail voor $teamName publiceren? Schrijf het weeknummer op:", "Weeknummer Invoer", $defaultWeek)
 
 if ($weekInput -eq "" -or -not ($weekInput -match '^\d+$')) {
     Write-Host "Geen geldig weeknummer ingevoerd. Script wordt afgesloten."
