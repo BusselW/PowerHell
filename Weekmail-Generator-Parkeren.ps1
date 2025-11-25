@@ -52,6 +52,7 @@ function Convert-ToServerRelativeUrl {
 }
 
 # --- Functie om Titel bij te werken (REST API) ---
+# Ondersteunt zowel Engelse ("Title") als Nederlandse ("Titel") locale
 function Update-SharePointTitleREST (
     [string]$ApiSiteUrl,
     [string]$ServerRelativeFileUrl,
@@ -64,6 +65,7 @@ function Update-SharePointTitleREST (
         Write-Host "[DRY-RUN] - Site: $ApiSiteUrl"
         Write-Host "[DRY-RUN] - Bestand: $ServerRelativeFileUrl"
         Write-Host "[DRY-RUN] - Nieuwe titel: $NewTitle"
+        Write-Host "[DRY-RUN] - Veldnamen die geprobeerd worden: Title, Titel (Nederlandse locale)"
         return
     }
     
@@ -106,26 +108,60 @@ function Update-SharePointTitleREST (
         }
         Write-Host "Metadata van bestand opgehaald (Type: $($itemMetadata.type))"
 
-        # STAP 3: Bereid de update-payload (JSON) voor
-        $payload = @{
-            "__metadata" = @{ "type" = $itemMetadata.type }
-            "Title"      = $NewTitle
-        }
-        $jsonPayload = $payload | ConvertTo-Json -Depth 3
-
-        # STAP 4: Voer de update (MERGE) uit
+        # STAP 3: Bereid de update-payload (JSON) voor en probeer verschillende veldnamen
+        # Probeer eerst "Title" (Engels), dan "Titel" (Nederlands) voor locale-ondersteuning
+        $titleFieldNames = @("Title", "Titel")
+        $updateSucceeded = $false
+        $lastError = $null
+        
         $updateUrl = $itemMetadata.uri
         
-        Write-Host "Update uitvoeren naar: $updateUrl"
-        Invoke-RestMethod -Uri $updateUrl -Method Post -UseDefaultCredentials -Headers @{
-            "Accept"             = "application/json;odata=verbose"
-            "X-RequestDigest"    = $formDigestValue
-            "X-HTTP-Method"      = "MERGE"
-            "If-Match"           = $itemMetadata.etag
-            "Content-Type"       = "application/json;odata=verbose"
-        } -Body $jsonPayload
+        foreach ($fieldName in $titleFieldNames) {
+            try {
+                Write-Host "Probeer titel bij te werken met veldnaam: $fieldName"
+                
+                $payload = @{
+                    "__metadata" = @{ "type" = $itemMetadata.type }
+                    $fieldName   = $NewTitle
+                }
+                $jsonPayload = $payload | ConvertTo-Json -Depth 3
 
-        Write-Host "SharePoint Titel succesvol bijgewerkt naar: $NewTitle"
+                # STAP 4: Voer de update (MERGE) uit
+                Write-Host "Update uitvoeren naar: $updateUrl"
+                Invoke-RestMethod -Uri $updateUrl -Method Post -UseDefaultCredentials -Headers @{
+                    "Accept"             = "application/json;odata=verbose"
+                    "X-RequestDigest"    = $formDigestValue
+                    "X-HTTP-Method"      = "MERGE"
+                    "If-Match"           = $itemMetadata.etag
+                    "Content-Type"       = "application/json;odata=verbose"
+                } -Body $jsonPayload -ErrorAction Stop
+
+                Write-Host "SharePoint Titel succesvol bijgewerkt naar: $NewTitle (veldnaam: $fieldName)"
+                $updateSucceeded = $true
+                break
+            } catch {
+                $lastError = $_
+                Write-Host "Update met veldnaam '$fieldName' mislukt: $($_.Exception.Message)"
+                # Haal nieuwe metadata op voor de volgende poging (etag kan veranderd zijn)
+                if ($fieldName -ne $titleFieldNames[-1]) {
+                    Write-Host "Probeer volgende veldnaam, metadata opnieuw ophalen..."
+                    try {
+                        $itemResponse = Invoke-RestMethod -Uri $fileApiUrl -Method Get -UseDefaultCredentials -Headers @{ 
+                            "Accept" = "application/json;odata=verbose" 
+                        } -ErrorAction Stop
+                        $itemMetadata = $itemResponse.d.__metadata
+                        Write-Host "Metadata succesvol opnieuw opgehaald."
+                    } catch {
+                        Write-Host "WAARSCHUWING: Kon metadata niet opnieuw ophalen: $($_.Exception.Message)"
+                        Write-Host "Doorgaan met volgende veldnaam poging met bestaande metadata..."
+                    }
+                }
+            }
+        }
+        
+        if (-not $updateSucceeded) {
+            throw "Kon titel niet bijwerken met geen enkele van de veldnamen (Title, Titel). Laatste fout: $($lastError.Exception.Message)"
+        }
 
     } catch {
         $outerException = $_
