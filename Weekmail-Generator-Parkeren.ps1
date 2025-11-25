@@ -144,20 +144,23 @@ function Update-SharePointTitleREST (
                 Write-Host "Update met veldnaam '$fieldName' mislukt: $($_.Exception.Message)"
                 # Haal nieuwe metadata op voor de volgende poging (etag kan veranderd zijn)
                 if ($fieldName -ne $titleFieldNames[-1]) {
+                    Write-Host "Probeer volgende veldnaam, metadata opnieuw ophalen..."
                     try {
                         $itemResponse = Invoke-RestMethod -Uri $fileApiUrl -Method Get -UseDefaultCredentials -Headers @{ 
                             "Accept" = "application/json;odata=verbose" 
                         } -ErrorAction Stop
                         $itemMetadata = $itemResponse.d.__metadata
+                        Write-Host "Metadata succesvol opnieuw opgehaald."
                     } catch {
-                        Write-Host "Kon metadata niet opnieuw ophalen: $($_.Exception.Message)"
+                        Write-Host "WAARSCHUWING: Kon metadata niet opnieuw ophalen: $($_.Exception.Message)"
+                        Write-Host "Doorgaan met volgende veldnaam poging met bestaande metadata..."
                     }
                 }
             }
         }
         
         if (-not $updateSucceeded) {
-            throw "Kon titel niet bijwerken met geen van de veldnamen (Title, Titel). Laatste fout: $($lastError.Exception.Message)"
+            throw "Kon titel niet bijwerken met geen enkele van de veldnamen (Title, Titel). Laatste fout: $($lastError.Exception.Message)"
         }
 
     } catch {
