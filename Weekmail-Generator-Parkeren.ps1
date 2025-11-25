@@ -227,7 +227,7 @@ function New-WeekmailFile {
         # --- STAP 4: TITEL-KOLOM BIJWERKEN (MET DE JUISTE SUBSITE-CONTEXT) ---
         Write-Progress -Id $progressId -Activity $activity -Status "Stap 4/5: SharePoint Titel-kolom bijwerken (API)..." -PercentComplete 60
         
-        $newSharePointTitle = "Weekmail $weekNumber ($jaar) - $teamName"
+        $newSharePointTitle = "Weekmail $teamName $jaar - Week $weekNumber"
         
         try {
             $serverRelativeUrl = Convert-ToServerRelativeUrl -UncPath $newFilePath -UncPrefix $uncPrefix
