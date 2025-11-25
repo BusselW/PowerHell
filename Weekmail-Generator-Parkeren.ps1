@@ -217,9 +217,9 @@ function New-WeekmailFile {
 
         # --- STAP 3: WACHTEN OP SHAREPOINT (MET PROGRESSIEBALK) ---
         Write-Host "Wachten op SharePoint-verwerking..."
-        $wachtTijd = 10 # Totaal 10 seconden wachten
+        $wachtTijd = 4 # Totaal 4 seconden wachten
         for ($i = 1; $i -le $wachtTijd; $i++) {
-            $percent = 40 + ($i * 2) # Telt op van 40% naar 60%
+            $percent = 40 + ($i * 20 / $wachtTijd) # Telt op van 40% naar 60%
             Write-Progress -Id $progressId -Activity $activity -Status "Stap 3/5: Wachten op SharePoint ($i/$wachtTijd sec)..." -PercentComplete $percent
             Start-Sleep -Seconds 1
         }
